@@ -1,9 +1,20 @@
 import { valibotResolver } from '@hookform/resolvers/valibot';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Camera, Edit3, Filter, Images, MoreVertical, Plus, Trash2 } from 'lucide-react';
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowRight,
+  Camera,
+  Edit3,
+  Filter,
+  Images,
+  MoreVertical,
+  Plus,
+  Trash2,
+} from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useForm, type UseFormReturn } from 'react-hook-form';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { ExerciseFormFields } from '@/components/exercise-form-fields';
 import { EXERCISE_PLACEHOLDER_SRC, ExerciseImage } from '@/components/exercise-image';
 import { ExerciseMediaGallery } from '@/components/exercise-media-gallery';
@@ -64,6 +75,7 @@ import {
 } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { apiFetch } from '@/lib/api';
+import { getExerciseCoverUrl } from '@/lib/exercise-cover';
 import {
   type ExerciseMediaItem,
   type ExerciseRecord,
@@ -193,6 +205,8 @@ function ExerciseEditor({
 
 export function CoachExercisesPage() {
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const archived = searchParams.get('status') === 'archived';
   const [query, setQuery] = useState('');
   const [group, setGroup] = useState('همه');
   const [notice, setNotice] = useState('');
@@ -202,6 +216,8 @@ export function CoachExercisesPage() {
   const [deleting, setDeleting] = useState<ExerciseRecord | null>(null);
   const [deletePending, setDeletePending] = useState(false);
   const [deleteError, setDeleteError] = useState('');
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState('');
   const createForm = useForm<ExerciseFormValues>({
     resolver: valibotResolver(exerciseSchema),
     defaultValues: emptyValues,
@@ -212,9 +228,20 @@ export function CoachExercisesPage() {
   });
 
   const exercisesQuery = useQuery({
-    queryKey: ['coach', 'exercises'],
-    queryFn: () => apiFetch<{ data: ExerciseRecord[] }>('/api/coach/exercises'),
+    queryKey: archived ? ['coach', 'exercises', 'archived'] : ['coach', 'exercises'],
+    queryFn: () =>
+      apiFetch<{ data: ExerciseRecord[] }>(
+        `/api/coach/exercises${archived ? '?archived=true' : ''}`,
+      ),
   });
+  useEffect(() => {
+    setQuery('');
+    setGroup('همه');
+    setDetailsId(null);
+    setEditingId(null);
+    setNotice('');
+    setActionError('');
+  }, [archived]);
   const items = exercisesQuery.data?.data ?? [];
   const muscleGroups = useMemo(
     () =>
@@ -307,7 +334,10 @@ export function CoachExercisesPage() {
     setDeletePending(true);
     setDeleteError('');
     try {
-      await apiFetch(`/api/coach/exercises/${exercise.id}`, { method: 'DELETE' });
+      await apiFetch(
+        `/api/coach/exercises/${exercise.id}${exercise.isArchived ? '/permanent' : ''}`,
+        { method: 'DELETE' },
+      );
       await queryClient.invalidateQueries({ queryKey: ['coach', 'exercises'] });
 
       if (detailsId === exercise.id) setDetailsId(null);
@@ -316,7 +346,11 @@ export function CoachExercisesPage() {
         editForm.reset(emptyValues);
       }
       setDeleting(null);
-      setNotice(`حرکت «${exercise.title}» از کتابخانه حذف شد.`);
+      setNotice(
+        exercise.isArchived
+          ? `حرکت «${exercise.title}» و فایل‌هایش برای همیشه حذف شدند.`
+          : `حرکت «${exercise.title}» به آرشیو منتقل شد و از بخش آرشیو قابل بازگردانی است.`,
+      );
     } catch (error) {
       setDeleteError(error instanceof Error ? error.message : 'حذف حرکت ناموفق بود.');
     } finally {
@@ -324,23 +358,56 @@ export function CoachExercisesPage() {
     }
   };
 
+  const restoreExercise = async (exercise: ExerciseRecord) => {
+    setRestoringId(exercise.id);
+    setActionError('');
+    try {
+      await apiFetch(`/api/coach/exercises/${exercise.id}/restore`, { method: 'POST' });
+      await queryClient.invalidateQueries({ queryKey: ['coach', 'exercises'] });
+      if (detailsId === exercise.id) setDetailsId(null);
+      setNotice(`حرکت «${exercise.title}» به فهرست حرکات فعال بازگردانده شد.`);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'بازگردانی حرکت ناموفق بود.');
+    } finally {
+      setRestoringId(null);
+    }
+  };
+
   return (
     <>
       <PageHeader
-        title="کتابخانه حرکات"
-        description="حرکات را یک‌بار تعریف کن، ویرایش کن و در برنامه‌های مختلف دوباره استفاده کن."
+        title={archived ? 'آرشیو حرکات' : 'کتابخانه حرکات'}
+        description={
+          archived
+            ? 'حرکات آرشیوشده را بازگردان یا در صورت عدم استفاده در برنامه‌ها، برای همیشه حذف کن.'
+            : 'حرکات را یک‌بار تعریف کن، ویرایش کن و در برنامه‌های مختلف دوباره استفاده کن.'
+        }
         action={
-          <ExerciseEditor
-            mode="create"
-            open={createOpen}
-            onOpenChange={(open) => {
-              setCreateOpen(open);
-              if (!open) createForm.reset(emptyValues);
-            }}
-            form={createForm}
-            onSubmit={addExercise}
-            muscleGroups={muscleGroups}
-          />
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" asChild>
+              <Link to={archived ? '/coach/exercises' : '/coach/exercises?status=archived'}>
+                {archived ? (
+                  <ArrowRight data-icon="inline-start" />
+                ) : (
+                  <Archive data-icon="inline-start" />
+                )}
+                {archived ? 'حرکات فعال' : 'آرشیو حرکات'}
+              </Link>
+            </Button>
+            {!archived && (
+              <ExerciseEditor
+                mode="create"
+                open={createOpen}
+                onOpenChange={(open) => {
+                  setCreateOpen(open);
+                  if (!open) createForm.reset(emptyValues);
+                }}
+                form={createForm}
+                onSubmit={addExercise}
+                muscleGroups={muscleGroups}
+              />
+            )}
+          </div>
         }
       />
 
@@ -356,6 +423,11 @@ export function CoachExercisesPage() {
         <p className="mb-5 rounded-xl bg-destructive/10 px-4 py-3 text-sm font-bold text-destructive">
           {exercisesQuery.error.message}
         </p>
+      )}
+      {actionError && (
+        <FieldError className="mb-5" role="alert">
+          {actionError}
+        </FieldError>
       )}
 
       <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -392,11 +464,14 @@ export function CoachExercisesPage() {
         </Field>
       </div>
 
+      {exercisesQuery.isLoading && (
+        <div className="mb-5 flex items-center gap-2 text-sm text-muted-foreground" role="status">
+          <Spinner /> در حال دریافت حرکات...
+        </div>
+      )}
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {filtered.map((exercise) => {
-          const cover =
-            exercise.media.find((media) => media.mediaType === 'image')?.url ??
-            EXERCISE_PLACEHOLDER_SRC;
+          const cover = getExerciseCoverUrl(exercise.media) ?? EXERCISE_PLACEHOLDER_SRC;
           return (
             <Card
               key={exercise.id}
@@ -421,19 +496,27 @@ export function CoachExercisesPage() {
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuGroup>
-                        <DropdownMenuItem onSelect={() => openEdit(exercise)}>
-                          <Edit3 />
-                          ویرایش
-                        </DropdownMenuItem>
+                        {archived ? (
+                          <DropdownMenuItem
+                            disabled={restoringId !== null}
+                            onSelect={() => void restoreExercise(exercise)}
+                          >
+                            <ArchiveRestore /> بازگردانی به حرکات فعال
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem onSelect={() => openEdit(exercise)}>
+                            <Edit3 /> ویرایش
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuItem
-                          variant="destructive"
+                          variant={archived ? 'destructive' : 'default'}
                           onSelect={() => {
                             setDeleteError('');
                             setDeleting(exercise);
                           }}
                         >
-                          <Trash2 />
-                          حذف
+                          {archived ? <Trash2 /> : <Archive />}
+                          {archived ? 'حذف دائمی' : 'انتقال به آرشیو'}
                         </DropdownMenuItem>
                       </DropdownMenuGroup>
                     </DropdownMenuContent>
@@ -441,6 +524,11 @@ export function CoachExercisesPage() {
                 </div>
               </div>
               <CardHeader>
+                {archived && (
+                  <Badge variant="secondary" className="w-fit">
+                    آرشیوشده
+                  </Badge>
+                )}
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <CardTitle>{exercise.title}</CardTitle>
@@ -459,9 +547,23 @@ export function CoachExercisesPage() {
                   {exercise.description || 'بدون توضیح'}
                 </p>
               </CardContent>
-              <CardFooter>
+              <CardFooter className="gap-2">
+                {archived && (
+                  <Button
+                    className="flex-1"
+                    disabled={restoringId !== null}
+                    onClick={() => void restoreExercise(exercise)}
+                  >
+                    {restoringId === exercise.id ? (
+                      <Spinner data-icon="inline-start" />
+                    ) : (
+                      <ArchiveRestore data-icon="inline-start" />
+                    )}
+                    بازگردانی
+                  </Button>
+                )}
                 <Button
-                  className="w-full"
+                  className="flex-1"
                   variant="outline"
                   onClick={() => setDetailsId(exercise.id)}
                 >
@@ -473,14 +575,24 @@ export function CoachExercisesPage() {
         })}
       </section>
 
-      {!filtered.length && !exercisesQuery.isLoading && (
+      {!filtered.length && !exercisesQuery.isLoading && !exercisesQuery.isError && (
         <Empty className="border">
           <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <Filter />
-            </EmptyMedia>
-            <EmptyTitle>حرکتی پیدا نشد</EmptyTitle>
-            <EmptyDescription>عبارت جست‌وجو یا گروه عضلانی را تغییر بده.</EmptyDescription>
+            <EmptyMedia variant="icon">{archived ? <Archive /> : <Filter />}</EmptyMedia>
+            <EmptyTitle>
+              {!items.length
+                ? archived
+                  ? 'آرشیو حرکات خالی است'
+                  : 'هنوز حرکت فعالی نداری'
+                : 'حرکتی پیدا نشد'}
+            </EmptyTitle>
+            <EmptyDescription>
+              {!items.length
+                ? archived
+                  ? 'حرکت‌هایی که به آرشیو منتقل کنی، اینجا نمایش داده می‌شوند.'
+                  : 'حرکت جدید بساز یا حرکت‌های قبلی را از بخش آرشیو بازگردان.'
+                : 'عبارت جست‌وجو یا گروه عضلانی را تغییر بده.'}
+            </EmptyDescription>
           </EmptyHeader>
         </Empty>
       )}
@@ -511,9 +623,23 @@ export function CoachExercisesPage() {
                 </p>
               </div>
               <DialogFooter>
-                <Button onClick={() => openEdit(selected)}>
-                  <Edit3 data-icon="inline-start" /> ویرایش حرکت
-                </Button>
+                {archived ? (
+                  <Button
+                    disabled={restoringId !== null}
+                    onClick={() => void restoreExercise(selected)}
+                  >
+                    {restoringId === selected.id ? (
+                      <Spinner data-icon="inline-start" />
+                    ) : (
+                      <ArchiveRestore data-icon="inline-start" />
+                    )}
+                    بازگردانی به حرکات فعال
+                  </Button>
+                ) : (
+                  <Button onClick={() => openEdit(selected)}>
+                    <Edit3 data-icon="inline-start" /> ویرایش حرکت
+                  </Button>
+                )}
               </DialogFooter>
             </div>
           )}
@@ -546,10 +672,13 @@ export function CoachExercisesPage() {
       >
         <AlertDialogContent className="sm:max-w-md">
           <AlertDialogHeader>
-            <AlertDialogTitle>حذف حرکت؟</AlertDialogTitle>
+            <AlertDialogTitle>
+              {deleting?.isArchived ? 'حذف دائمی حرکت؟' : 'انتقال حرکت به آرشیو؟'}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              حرکت «{deleting?.title}» از کتابخانه و انتخاب‌های آینده حذف می‌شود. برنامه‌های قبلی بدون
-              تغییر باقی می‌مانند.
+              {deleting?.isArchived
+                ? `حرکت «${deleting.title}» و فایل‌های آموزشی آن برای همیشه حذف می‌شوند و قابل بازگردانی نخواهند بود. اگر این حرکت در برنامه‌ای استفاده شده باشد، حذف دائمی انجام نمی‌شود.`
+                : `حرکت «${deleting?.title}» از فهرست فعال و انتخاب‌های جدید کنار گذاشته می‌شود و از بخش آرشیو قابل بازگردانی است. برنامه‌های قبلی حفظ می‌شوند.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           {deleteError && <FieldError className="mt-4">{deleteError}</FieldError>}
@@ -562,7 +691,7 @@ export function CoachExercisesPage() {
             <AlertDialogAction asChild>
               <Button
                 type="button"
-                variant="destructive"
+                variant={deleting?.isArchived ? 'destructive' : 'default'}
                 disabled={deletePending}
                 onClick={(event) => {
                   event.preventDefault();
@@ -571,10 +700,16 @@ export function CoachExercisesPage() {
               >
                 {deletePending ? (
                   <Spinner data-icon="inline-start" />
-                ) : (
+                ) : deleting?.isArchived ? (
                   <Trash2 data-icon="inline-start" />
+                ) : (
+                  <Archive data-icon="inline-start" />
                 )}
-                {deletePending ? 'در حال حذف...' : 'حذف حرکت'}
+                {deletePending
+                  ? 'در حال انجام...'
+                  : deleting?.isArchived
+                    ? 'حذف دائمی'
+                    : 'انتقال به آرشیو'}
               </Button>
             </AlertDialogAction>
           </AlertDialogFooter>

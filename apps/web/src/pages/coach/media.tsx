@@ -311,6 +311,7 @@ export function CoachMediaPage() {
                 <>
                   <video
                     src={item.url}
+                    poster={item.thumbnailUrl ?? undefined}
                     muted
                     preload="metadata"
                     crossOrigin="anonymous"

@@ -54,6 +54,8 @@ import { Separator } from '@/components/ui/separator';
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import { apiFetch } from '@/lib/api';
+import { getExerciseCoverUrl } from '@/lib/exercise-cover';
+import type { ExerciseMediaItem } from '@/lib/exercise-media';
 import { planSchema, type PlanFormValues } from '@/lib/form-schemas';
 import { cn, formatFaNumber, todayApiValue } from '@/lib/utils';
 
@@ -69,7 +71,7 @@ type ApiExercise = {
   muscleGroup: string;
   equipment: string;
   difficulty: 'beginner' | 'intermediate' | 'advanced';
-  media: Array<{ mediaType: 'image' | 'video'; url: string }>;
+  media: ExerciseMediaItem[];
 };
 
 type DisplayExercise = {
@@ -93,8 +95,7 @@ function mapExercise(exercise: ApiExercise): DisplayExercise {
     muscleGroup: exercise.muscleGroup,
     equipment: exercise.equipment,
     difficulty: labels[exercise.difficulty],
-    image:
-      exercise.media.find((item) => item.mediaType === 'image')?.url ?? EXERCISE_PLACEHOLDER_SRC,
+    image: getExerciseCoverUrl(exercise.media) ?? EXERCISE_PLACEHOLDER_SRC,
   };
 }
 

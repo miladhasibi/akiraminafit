@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { uploadRequestSchema } from '@akiraminafit/contracts';
 import { bodyReports, db, exerciseMedia, exercises } from '@akiraminafit/db';
@@ -8,17 +8,8 @@ import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import { env } from '../env.js';
 import { requirePermission } from '../middleware/auth.js';
+import { s3 } from '../lib/storage.js';
 import type { AppEnv } from '../types.js';
-
-const s3 = new S3Client({
-  endpoint: env.S3_ENDPOINT,
-  region: env.S3_REGION,
-  forcePathStyle: env.S3_FORCE_PATH_STYLE,
-  credentials: {
-    accessKeyId: env.S3_ACCESS_KEY,
-    secretAccessKey: env.S3_SECRET_KEY,
-  },
-});
 
 function safeFileName(value: string) {
   return value.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-120);

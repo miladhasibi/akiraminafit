@@ -77,7 +77,13 @@ export const plansRoutes = new Hono<AppEnv>()
       const library = await db
         .select()
         .from(exercises)
-        .where(and(eq(exercises.coachId, coach.id), inArray(exercises.id, exerciseIds)));
+        .where(
+          and(
+            eq(exercises.coachId, coach.id),
+            eq(exercises.isArchived, false),
+            inArray(exercises.id, exerciseIds),
+          ),
+        );
       if (library.length !== exerciseIds.length) {
         return c.json({ message: 'حداقل یکی از حرکات انتخاب‌شده معتبر نیست.' }, 400);
       }

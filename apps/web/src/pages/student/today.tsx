@@ -36,6 +36,7 @@ import { Progress } from '@/components/ui/progress';
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import { apiFetch, apiUrl } from '@/lib/api';
+import { getExerciseCoverUrl } from '@/lib/exercise-cover';
 import type { ExerciseMediaItem } from '@/lib/exercise-media';
 import { workoutNoteSchema, type WorkoutNoteFormValues } from '@/lib/form-schemas';
 import { enqueueMutation } from '@/lib/offline-queue';
@@ -64,7 +65,7 @@ type TodayApiResponse = {
         targetWeight: string | null;
         notes: string;
       };
-      media: Array<{ mediaType: 'image' | 'video'; url: string }>;
+      media: ExerciseMediaItem[];
     }>;
   };
   message?: string;
@@ -109,8 +110,7 @@ export function StudentTodayPage() {
   const workoutItems: DisplayWorkoutItem[] = useMemo(() => {
     return (apiData?.items ?? []).flatMap((item) => {
       if (!item.planned) return [];
-      const image =
-        item.media.find((media) => media.mediaType === 'image')?.url ?? EXERCISE_PLACEHOLDER_SRC;
+      const image = getExerciseCoverUrl(item.media) ?? EXERCISE_PLACEHOLDER_SRC;
       return [
         {
           id: item.id,
@@ -122,11 +122,7 @@ export function StudentTodayPage() {
           weight: Number(item.planned.targetWeight ?? 0),
           muscleGroup: 'تمرین برنامه',
           image,
-          media: item.media.map((media, index) => ({
-            id: `${item.id}-media-${index}`,
-            mediaType: media.mediaType,
-            url: media.url,
-          })),
+          media: item.media,
         },
       ];
     });
@@ -145,7 +141,12 @@ export function StudentTodayPage() {
     [activeId, workoutItems],
   );
   const workoutMediaUrls = useMemo(
-    () => workoutItems.flatMap((item) => item.media.map((media) => media.url)),
+    () =>
+      workoutItems.flatMap((item) =>
+        item.media.flatMap((media) =>
+          media.thumbnailUrl ? [media.url, media.thumbnailUrl] : [media.url],
+        ),
+      ),
     [workoutItems],
   );
 

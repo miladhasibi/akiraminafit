@@ -7,6 +7,7 @@ export type ExerciseMediaItem = {
   exerciseId?: string;
   mediaType: 'image' | 'video';
   url: string;
+  thumbnailUrl?: string | null;
   storageKey?: string;
   mimeType?: string;
   fileSize?: number;
@@ -21,6 +22,7 @@ export type ExerciseRecord = {
   muscleGroup: string;
   equipment: string;
   difficulty: 'beginner' | 'intermediate' | 'advanced';
+  isArchived: boolean;
   media: ExerciseMediaItem[];
 };
 

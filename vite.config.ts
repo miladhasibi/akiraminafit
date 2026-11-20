@@ -23,7 +23,7 @@ export default defineConfig({
         plugins: ['typescript', 'react'],
       },
       {
-        files: ['apps/api/**', 'packages/db/**'],
+        files: ['apps/api/**', 'apps/initial-data/**', 'packages/db/**'],
         env: { node: true },
         rules: { 'no-console': 'off' },
       },

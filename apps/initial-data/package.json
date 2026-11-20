@@ -1,0 +1,30 @@
+{
+  "name": "@akiraminafit/initial-data",
+  "version": "0.1.0",
+  "private": true,
+  "description": "دریافت داده‌ی اولیه: دریافت و وارد کردن بانک حرکات و رسانه‌ها",
+  "type": "module",
+  "scripts": {
+    "scrape": "node --import tsx src/cli.ts scrape",
+    "import": "node --import tsx src/cli.ts import",
+    "sync": "node --import tsx src/cli.ts sync",
+    "test": "node --import tsx --test src/*.test.ts",
+    "build": "vp pack",
+    "start": "node --import tsx dist/cli.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@akiraminafit/contracts": "0.1.0",
+    "@akiraminafit/db": "0.1.0",
+    "@aws-sdk/client-s3": "^3.864.0",
+    "dotenv": "^17.2.1",
+    "drizzle-orm": "^0.45.2",
+    "playwright": "^1.65.1",
+    "tsx": "^4.20.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.1.0",
+    "typescript": "^5.9.2"
+  }
+}

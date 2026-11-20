@@ -90,6 +90,7 @@ export function ExerciseMediaGallery({
           <video
             key={active.id}
             src={active.url}
+            poster={active.thumbnailUrl ?? undefined}
             controls
             playsInline
             preload="metadata"
@@ -164,6 +165,8 @@ export function ExerciseMediaGallery({
             >
               {item.mediaType === 'image' ? (
                 <img src={item.url} alt="" className="size-full object-cover" />
+              ) : item.thumbnailUrl ? (
+                <img src={item.thumbnailUrl} alt="" className="size-full object-cover" />
               ) : (
                 <span className="grid size-full place-items-center text-muted-foreground">
                   <Video className="size-5" />
