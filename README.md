@@ -68,7 +68,6 @@ muscle SVGs. It owns its source, dependencies, tests, configuration and local bu
 separate environment file before importing into an existing coach's library:
 
 ```bash
-npx playwright install chromium
 cp apps/initial-data/.env.example apps/initial-data/.env
 vp run initial-data:sync
 ```

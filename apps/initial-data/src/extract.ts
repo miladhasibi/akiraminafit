@@ -1,52 +1,64 @@
-import { constants } from 'node:fs';
-import { access } from 'node:fs/promises';
-import path from 'node:path';
-import { chromium, type Page } from 'playwright';
+import { Window, type Element, type HTMLElement, type SVGSVGElement } from 'happy-dom';
 
-export async function openBrowser() {
-  let executablePath = process.env.MRGYM_CHROMIUM_PATH;
-  if (!executablePath) {
-    try {
-      await access(chromium.executablePath(), constants.X_OK);
-    } catch {
-      // Reuse an installed Chromium when the Playwright browser has not been downloaded.
-      for (const directory of (process.env.PATH ?? '').split(path.delimiter).filter(Boolean)) {
-        for (const name of ['chromium', 'chromium-browser', 'google-chrome']) {
-          const candidate = path.join(directory, name);
-          try {
-            await access(candidate, constants.X_OK);
-            executablePath = candidate;
-            break;
-          } catch {
-            /* try next executable */
-          }
-        }
-        if (executablePath) break;
-      }
-    }
-  }
+async function withDocument<T>(html: string, extract: (window: Window) => T): Promise<T> {
+  // The source already includes the data and CSS. Parse them in Node without
+  // launching a browser, running page scripts or fetching embedded resources.
+  const window = new Window({
+    url: 'https://mrgym.ir/',
+    width: 1440,
+    height: 1000,
+    settings: {
+      enableJavaScriptEvaluation: false,
+      disableJavaScriptFileLoading: true,
+      enableCSSFileLoading: false,
+      enableImageFileLoading: false,
+      enableIframePageLoading: false,
+      navigation: {
+        disableMainFrameNavigation: true,
+        disableChildFrameNavigation: true,
+        disableChildPageNavigation: true,
+      },
+    },
+  });
   try {
-    return await chromium.launch({
-      headless: true,
-      ...(executablePath ? { executablePath } : {}),
-    });
-  } catch (error) {
-    throw new Error(
-      'Chromium could not start. Run: npx playwright install chromium; or set MRGYM_CHROMIUM_PATH.',
-      { cause: error },
-    );
+    window.document.write(html);
+    return extract(window);
+  } finally {
+    await window.happyDOM.close();
   }
 }
 
-export async function loadHtml(page: Page, html: string) {
-  // Static public HTML already contains the muscle classes. Never execute site scripts
-  // or load ads, video, fonts, analytics, or other unrelated resources.
-  await page.setContent(html, { waitUntil: 'domcontentloaded' });
+export function extractLinks(html: string) {
+  return withDocument(html, ({ document }) =>
+    Array.from(document.querySelectorAll('a[href]')).map((link) => link.getAttribute('href')!),
+  );
 }
 
-export async function extractExercise(page: Page) {
-  return page.evaluate(() => {
-    // Object methods remain self-contained when tsx preserves function names.
+export function sitemapLocations(xml: string) {
+  return withDocument('', (window) => {
+    const document = new window.DOMParser().parseFromString(xml, 'application/xml');
+    if (document.querySelector('parsererror')) throw new Error('Invalid sitemap XML.');
+    const root = document.documentElement.localName;
+    if (!['sitemapindex', 'urlset'].includes(root)) throw new Error('Not a sitemap.');
+    return {
+      index: root === 'sitemapindex',
+      // image:loc and video:content_loc are media, not exercise pages.
+      urls: Array.from(document.documentElement.children).flatMap((child) =>
+        Array.from(child.children)
+          .filter(
+            (node) =>
+              node.localName === 'loc' &&
+              node.namespaceURI === document.documentElement.namespaceURI,
+          )
+          .map((node) => node.textContent.trim()),
+      ),
+    };
+  });
+}
+
+export function extractExercise(html: string) {
+  return withDocument(html, (window) => {
+    const { document } = window;
     const { text, one } = {
       text(this: void, node: Element | null) {
         return (node?.textContent ?? '').replace(/\s+/g, ' ').trim();
@@ -105,18 +117,40 @@ export async function extractExercise(page: Page) {
         'stop-opacity',
         'clip-rule',
       ];
+      const nonInherited = new Set(['opacity', 'vector-effect', 'stop-color', 'stop-opacity']);
       // Freeze the real CSS cascade (including inherited values and CSS variables).
       // Keep transform attributes on mirrored muscle groups intact.
       originals.forEach((original, index) => {
         const copy = copies[index]!;
-        const computed = getComputedStyle(original);
+        const computed = window.getComputedStyle(original);
         copy.removeAttribute('style');
         for (const property of properties) {
-          const value = computed
-            .getPropertyValue(property)
-            .trim()
-            .replace(/url\(["']?[^)]*#([^"')]+)["']?\)/g, 'url(#$1)');
-          if (value) copy.setAttribute(property, value);
+          let value = computed.getPropertyValue(property).trim();
+          // Happy DOM leaves some inherited SVG properties empty. Preserve the
+          // surrounding page's styles on the exported root; children can then
+          // inherit normally without overriding their own presentation attributes.
+          if (
+            original === svg &&
+            !value &&
+            !svg.hasAttribute(property) &&
+            !nonInherited.has(property)
+          ) {
+            for (
+              let ancestor = svg.parentElement;
+              ancestor && !value;
+              ancestor = ancestor.parentElement
+            ) {
+              value =
+                window.getComputedStyle(ancestor).getPropertyValue(property).trim() ||
+                ancestor.getAttribute(property) ||
+                '';
+            }
+          }
+          if (value)
+            copy.setAttribute(
+              property,
+              value.replace(/url\(["']?[^)]*#([^"')]+)["']?\)/g, 'url(#$1)'),
+            );
         }
       });
       // The gradients live in a zero-sized sibling SVG; each exported view needs its own copy.
@@ -143,16 +177,17 @@ export async function extractExercise(page: Page) {
         .forEach((node) => node.remove());
       [clone, ...clone.querySelectorAll('*')].forEach((node) => {
         for (const attr of Array.from(node.attributes)) {
+          const value = attr.value ?? '';
           if (
             /^on/i.test(attr.name) ||
             ['class', 'tabindex', 'href', 'xlink:href'].includes(attr.name) ||
-            (attr.value.includes('url(') && !/^url\(#[\w-]+\)$/.test(attr.value))
+            (value.includes('url(') && !/^url\(#[\w-]+\)$/.test(value))
           ) {
             node.removeAttribute(attr.name);
           }
         }
       });
-      return { side, svg: new XMLSerializer().serializeToString(clone) };
+      return { side, svg: new window.XMLSerializer().serializeToString(clone) };
     });
     if (diagrams.length !== 2 || new Set(diagrams.map((item) => item.side)).size !== 2) {
       throw new Error('Both front and back muscle diagrams are required.');

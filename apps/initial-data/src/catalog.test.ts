@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
+import { Window } from 'happy-dom';
 import { access, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
-import type { Browser, Page } from 'playwright';
-import { extractExercise, loadHtml, openBrowser } from './browser.js';
+import { extractExercise, sitemapLocations } from './extract.js';
 import {
   assetPath,
   catalogId,
@@ -17,21 +18,14 @@ import {
   type Manifest,
 } from './bundle.js';
 import { preflightBundle, mediaStorageKey } from './import.js';
-import { discoverCategoryExercises, scrapeCatalog, sitemapLocations } from './scrape.js';
+import { discoverCategoryExercises, discoverExercises, scrapeCatalog } from './scrape.js';
 import { SourceClient } from './http.js';
 
-let browser: Browser;
-let page: Page;
 let directory: string;
 before(async () => {
-  browser = await openBrowser();
-  const context = await browser.newContext({ javaScriptEnabled: false });
-  await context.route('**/*', (route) => route.abort());
-  page = await context.newPage();
   directory = await mkdtemp(path.join(os.tmpdir(), 'mrgym-catalog-test-'));
 });
 after(async () => {
-  await browser?.close();
   if (directory) await rm(directory, { recursive: true, force: true });
 });
 
@@ -58,8 +52,7 @@ ${['front', 'back'].map((side) => `<figure class="mgx-fig" data-side="${side}"><
 </body></html>`;
 
 void test('extracts the player video, Persian fields and both CSS-colored SVG views', async () => {
-  await loadHtml(page, fixture);
-  const result = await extractExercise(page);
+  const result = await extractExercise(fixture);
   assert.equal(result.title, 'حرکت آزمایشی');
   assert.equal(result.englishTitle, 'Test Exercise');
   assert.equal(result.videoUrl, 'https://video.mrgym.ir/Exercise/main.mp4');
@@ -68,44 +61,129 @@ void test('extracts the player video, Persian fields and both CSS-colored SVG vi
   assert.deepEqual(result.muscles, { chest: { fa: 'سینه', pri: 1 } });
   assert.deepEqual(result.steps, ['شروع مرحله اول']);
   assert.equal(result.diagrams.length, 2);
-  for (const diagram of result.diagrams) {
-    await page.setContent(diagram.svg);
-    const rendered = await page.evaluate(() => {
+  const window = new Window();
+  try {
+    for (const diagram of result.diagrams) {
+      const document = new window.DOMParser().parseFromString(diagram.svg, 'image/svg+xml');
+      assert.equal(document.querySelector('parsererror'), null);
       const target = document.querySelector('[data-slug="chest"] path')!;
-      return {
-        fill: getComputedStyle(target).fill,
-        stroke: getComputedStyle(target).stroke,
+      const rendered = {
+        fill: target.getAttribute('fill')!,
+        stroke: target.getAttribute('stroke'),
         secondary: document.querySelector('svg > g:last-child path')?.getAttribute('fill'),
         gradient: Boolean(document.querySelector('svg > defs #primary-gradient')),
         transform: document.querySelector('[transform]')?.getAttribute('transform'),
         background: document.querySelector('svg > rect')?.getAttribute('fill'),
         hasCss: Boolean(document.querySelector('style, [class]')),
-        width: document.querySelector('svg')?.getBoundingClientRect().width,
+        width: document.querySelector('svg')?.getAttribute('width'),
       };
-    });
-    assert.match(rendered.fill, /url\(["']?#primary-gradient["']?\)/);
-    assert.equal(rendered.stroke, 'rgb(255, 248, 225)');
-    assert.equal(rendered.secondary, 'rgb(251, 146, 60)');
-    assert.equal(rendered.gradient, true);
-    assert.equal(rendered.transform, 'translate(320,0) scale(-1,1)');
-    assert.equal(rendered.background, '#0e1116');
-    assert.equal(rendered.hasCss, false);
-    assert.equal(rendered.width, 640);
+      assert.match(rendered.fill, /url\(["']?#primary-gradient["']?\)/);
+      assert.equal(rendered.stroke, 'rgb(255, 248, 225)');
+      assert.equal(rendered.secondary?.replace(/\s/g, ''), 'rgb(251,146,60)');
+      assert.equal(rendered.gradient, true);
+      assert.equal(rendered.transform, 'translate(320,0) scale(-1,1)');
+      assert.equal(rendered.background, '#0e1116');
+      assert.equal(rendered.hasCss, false);
+      assert.equal(rendered.width, '640');
+    }
+  } finally {
+    await window.happyDOM.close();
   }
 });
 
 void test('fails when the main player is missing instead of using an unrelated video', async () => {
-  await loadHtml(page, fixture.replace('id="mgx-player"', 'id="other-player"'));
-  await assert.rejects(extractExercise(page), /No main video/);
+  await assert.rejects(
+    extractExercise(fixture.replace('id="mgx-player"', 'id="other-player"')),
+    /No main video/,
+  );
+});
+
+void test('preserves inherited SVG colors and local presentation attributes', async () => {
+  const result = await extractExercise(
+    fixture
+      .replace(
+        '</style>',
+        '.mgx-anat { fill: #123456; stroke: #abcdef; stroke-width: 3; opacity: 0.5; }</style>',
+      )
+      .replaceAll(
+        '<svg viewBox="0 0 320 480">',
+        '<svg viewBox="0 0 320 480"><path data-local="true" fill="#654321" d="M0 0h5v5Z"/>',
+      ),
+  );
+  const window = new Window();
+  try {
+    for (const diagram of result.diagrams) {
+      const document = new window.DOMParser().parseFromString(diagram.svg, 'image/svg+xml');
+      const svg = document.documentElement;
+      assert.equal(svg.getAttribute('fill'), '#123456');
+      assert.equal(svg.getAttribute('stroke'), '#abcdef');
+      assert.equal(svg.getAttribute('stroke-width'), '3');
+      assert.equal(svg.getAttribute('opacity'), null);
+      assert.equal(svg.querySelector('[data-local]')?.getAttribute('fill'), '#654321');
+    }
+  } finally {
+    await window.happyDOM.close();
+  }
+});
+
+void test('parses untrusted HTML without executing scripts or loading embedded resources', async (t) => {
+  const requests: string[] = [];
+  const server = createServer((request, response) => {
+    requests.push(request.url!);
+    response.end('unexpected embedded request');
+  });
+  t.after(
+    () =>
+      new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      ),
+  );
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const origin = `http://127.0.0.1:${address.port}`;
+  const html = fixture
+    .replace(
+      '<head>',
+      `<head>
+    <link rel="stylesheet" href="${origin}/style.css">
+    <style>@import url("${origin}/import.css");</style>
+    <script src="${origin}/script.js"></script>
+  `,
+    )
+    .replace(
+      '<body>',
+      `<body>
+    <img src="${origin}/image.png">
+    <iframe src="${origin}/frame"></iframe>
+    <iframe srcdoc="&lt;script&gt;parent.document.querySelector('h1').textContent='executed'&lt;/script&gt;"></iframe>
+  `,
+    );
+  const result = await extractExercise(html);
+  assert.equal(result.title, 'حرکت آزمایشی');
+  assert.deepEqual(requests, []);
 });
 
 void test('reads only page locations from namespaced sitemaps, excluding image locations', async () => {
   const parsed = await sitemapLocations(
-    page,
     `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"><url><loc>https://mrgym.ir/exercise/test/</loc><image:image><image:loc>https://mrgym.ir/media/photo.webp</image:loc></image:image></url></urlset>`,
   );
   assert.deepEqual(parsed, { index: false, urls: ['https://mrgym.ir/exercise/test/'] });
-  await assert.rejects(sitemapLocations(page, '<html>error</html>'), /Not a sitemap/);
+  await assert.rejects(sitemapLocations('<html>error</html>'), /Not a sitemap/);
+  await assert.rejects(sitemapLocations('<urlset><url></urlset>'), /Invalid sitemap XML/);
+});
+
+void test('discovers all exercise sitemaps and deduplicates their page locations', async (t) => {
+  const client = new SourceClient(0);
+  t.mock.method(client, 'text', async (url: string) =>
+    url.endsWith('/sitemap_index.xml')
+      ? '<sitemapindex><sitemap><loc>https://mrgym.ir/exercise-sitemap.xml</loc></sitemap><sitemap><loc>https://mrgym.ir/exercise-sitemap2.xml</loc></sitemap><sitemap><loc>https://mrgym.ir/post-sitemap.xml</loc></sitemap></sitemapindex>'
+      : `<urlset><url><loc>https://mrgym.ir/exercise/shared/</loc></url><url><loc>https://mrgym.ir/exercise/${url.endsWith('sitemap2.xml') ? 'second' : 'first'}/</loc></url></urlset>`,
+  );
+  assert.deepEqual(
+    await discoverExercises(client),
+    ['first', 'second', 'shared'].map((slug) => `${SOURCE}/exercise/${slug}/`),
+  );
 });
 
 void test('uses stable coach-scoped IDs and rejects unrelated source URLs', () => {
@@ -149,16 +227,12 @@ void test('combines categories without duplicate exercises or unrelated links', 
       <a href="https://video.mrgym.ir/test.mp4">Video</a>`;
   });
   assert.deepEqual(
-    await discoverCategoryExercises(page, client, [
-      'chest',
-      'https://mrgym.ir/exercises/chest/',
-      'back',
-    ]),
+    await discoverCategoryExercises(client, ['chest', 'https://mrgym.ir/exercises/chest/', 'back']),
     ['back-test', 'chest-test', 'shared'].map((slug) => `${SOURCE}/exercise/${slug}/`),
   );
   assert.deepEqual(requested, [`${SOURCE}/exercises/chest/`, `${SOURCE}/exercises/back/`]);
   t.mock.method(client, 'text', async () => '<a href="/exercises/">No exercises</a>');
-  await assert.rejects(discoverCategoryExercises(page, client, ['missing']), /No exercises/);
+  await assert.rejects(discoverCategoryExercises(client, ['missing']), /No exercises/);
 });
 
 async function makeBundle(subdirectory: string) {

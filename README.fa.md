@@ -69,7 +69,6 @@ app مستقل [دریافت داده‌ی اولیه](apps/initial-data/README.
 همراه ویدیو و SVG عضلات است. ابتدا تنظیمات مستقل آن را مقداردهی کنید:
 
 ```bash
-npx playwright install chromium
 cp apps/initial-data/.env.example apps/initial-data/.env
 vp run initial-data:sync
 ```

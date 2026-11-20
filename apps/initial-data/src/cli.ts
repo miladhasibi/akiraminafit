@@ -24,8 +24,7 @@ Options:
   --allow-partial       Explicitly import successful records from an incomplete bundle
   --help                Show help
 
-Install Chromium once: npx playwright install chromium
-Or set MRGYM_CHROMIUM_PATH to your installed Chromium executable.
+Scraping runs entirely in Node.js; no Chromium or browser installation is needed.
 Interrupted scrapes resume with the same command. See apps/initial-data/README.md.
 `;
 
