@@ -2,7 +2,8 @@ FROM golang:1.25-alpine AS build-base
 
 # Keep the cpuv1 compatibility of the former upstream images.
 ENV CGO_ENABLED=0 GOAMD64=v1
-
+RUN apk add --no-cache git
+ENV GOPROXY="https://goproxy.cn"
 FROM build-base AS server-build
 ARG MINIO_VERSION=RELEASE.2025-10-15T17-29-55Z
 RUN --mount=type=cache,target=/go/pkg/mod \
